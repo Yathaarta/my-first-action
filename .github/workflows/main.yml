@@ -1,0 +1,12 @@
+name: My Assignment Action
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-job:
+    runs-on: ubuntu-latest 
+    
+    steps:
+      - name: 24f2007047@ds.study.iitm.ac.in
+        run: echo "Hello! The robot is running successfully!"
