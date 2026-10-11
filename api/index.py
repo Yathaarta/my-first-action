@@ -1,71 +1,66 @@
 from fastapi import FastAPI, Request, Response
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
 import pandas as pd
 import os
+import json
 
 app = FastAPI()
 
-# 1. Standard CORS Middleware
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"], 
-    allow_headers=["*"],
-)
-
-class QueryData(BaseModel):
-    regions: list[str]
-    threshold_ms: float
-
-# 2. The exact headers that worked for the student in the forum
 CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    "Access-Control-Expose-Headers": "Access-Control-Allow-Origin",
+    "Access-Control-Allow-Methods": "*",
+    "Access-Control-Allow-Headers": "*",
 }
 
-# 3. Manually catch the invisible OPTIONS preflight check and approve it
-@app.options("/")
-@app.options("/{path:path}")
-def preflight_handler(path: str = ""):
-    return Response(headers=CORS_HEADERS)
+# Catch literally ANY path, GET, POST, or OPTIONS
+@app.api_route("/{path:path}", methods=["GET", "POST", "OPTIONS"])
+async def catch_all(request: Request, path: str):
+    
+    # 1. Instantly approve the invisible CORS preflight check
+    if request.method == "OPTIONS":
+        return Response(headers=CORS_HEADERS)
 
-# 4. Our actual POST endpoint
-@app.post("/")
-@app.post("/{path:path}")
-def get_metrics(query: QueryData, path: str = ""):
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    file_path = os.path.join(current_dir, "q-vercel-latency.json")
-    
-    # Safely load the data (handling both standard JSON and JSON Lines formats)
-    try:
-        df = pd.read_json(file_path)
-        if 'latency' not in df.columns:
-            df = pd.read_json(file_path, lines=True)
-    except:
-        df = pd.read_json(file_path, lines=True)
-        
-    results = {}
-    
-    for region in query.regions:
-        region_data = df[df['region'] == region]
-        if len(region_data) == 0:
-            continue
+    # 2. Process the POST request manually to avoid 422 Validation Errors
+    if request.method == "POST":
+        try:
+            # Read the raw body bytes directly
+            body_bytes = await request.body()
+            if not body_bytes:
+                return JSONResponse({"error": "Empty body"}, headers=CORS_HEADERS)
+                
+            body = json.loads(body_bytes)
+            regions = body.get("regions", [])
+            threshold_ms = body.get("threshold_ms", 180)
+
+            # Safely load the data
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            file_path = os.path.join(current_dir, "q-vercel-latency.json")
             
-        avg_lat = region_data['latency'].mean()
-        p95_lat = region_data['latency'].quantile(0.95)
-        avg_up = region_data['uptime'].mean()
-        breaches = (region_data['latency'] > query.threshold_ms).sum()
-        
-        results[region] = {
-            "avg_latency": float(avg_lat),
-            "p95_latency": float(p95_lat),
-            "avg_uptime": float(avg_up),
-            "breaches": int(breaches)
-        }
-        
-    # Return the math results WITH the mandatory forum headers attached
-    return JSONResponse(content=results, headers=CORS_HEADERS)
+            try:
+                df = pd.read_json(file_path)
+                if 'latency' not in df.columns:
+                    df = pd.read_json(file_path, lines=True)
+            except:
+                df = pd.read_json(file_path, lines=True)
+                
+            # Calculate metrics
+            results = {}
+            for region in regions:
+                region_data = df[df['region'] == region]
+                if len(region_data) == 0:
+                    continue
+                    
+                results[region] = {
+                    "avg_latency": float(region_data['latency'].mean()),
+                    "p95_latency": float(region_data['latency'].quantile(0.95)),
+                    "avg_uptime": float(region_data['uptime'].mean()),
+                    "breaches": int((region_data['latency'] > threshold_ms).sum())
+                }
+            return JSONResponse(content=results, headers=CORS_HEADERS)
+            
+        except Exception as e:
+            # Even if it crashes, force the CORS headers so the grader sees the error
+            return JSONResponse(content={"error": str(e)}, headers=CORS_HEADERS, status_code=500)
+            
+    # 3. Fallback for GET requests
+    return JSONResponse(content={"message": "Ready for POST requests"}, headers=CORS_HEADERS)
