@@ -19,14 +19,12 @@ class QueryData(BaseModel):
     regions: list[str]
     threshold_ms: float
 
-# Attach CORS headers to EVERY response, even errors
 custom_headers = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "*",
     "Access-Control-Allow-Headers": "*",
 }
 
-# 1. The {path:path} trick tells FastAPI to accept literally ANY URL the grader tries
 @app.post("/")
 @app.post("/{path:path}")
 def get_metrics(query: QueryData, path: str = ""):
@@ -34,11 +32,30 @@ def get_metrics(query: QueryData, path: str = ""):
         current_dir = os.path.dirname(os.path.abspath(__file__))
         file_path = os.path.join(current_dir, "q-vercel-latency.json")
         
-        # If the file is missing, this will catch the error and tell you!
         if not os.path.exists(file_path):
             return JSONResponse(content={"error": "JSON file not found!"}, headers=custom_headers)
             
-        df = pd.read_json(file_path)
+        # 1. First, try reading it as a normal JSON file
+        try:
+            df = pd.read_json(file_path)
+        except ValueError:
+            # If that crashes, it's definitely a JSON Lines file
+            df = pd.read_json(file_path, lines=True)
+            
+        # 2. If it loaded normally, but messed up the columns, try JSON Lines again
+        if 'latency' not in df.columns:
+            try:
+                df = pd.read_json(file_path, lines=True)
+            except:
+                pass
+                
+        # 3. IF IT STILL CAN'T FIND 'latency', print out the actual columns!
+        if 'latency' not in df.columns:
+            return JSONResponse(
+                content={"error": f"Missing 'latency'. The columns I actually see are: {list(df.columns)}"}, 
+                headers=custom_headers
+            )
+
         results = {}
         
         for region in query.regions:
@@ -60,8 +77,6 @@ def get_metrics(query: QueryData, path: str = ""):
             
         return JSONResponse(content=results, headers=custom_headers)
 
-    # 2. If ANYTHING crashes, return the exact error message with CORS headers
-    # so the grader doesn't just say "Failed to fetch"
     except Exception as e:
         error_msg = str(e) + "\n" + traceback.format_exc()
         return JSONResponse(content={"error": error_msg}, headers=custom_headers, status_code=500)
