@@ -1,15 +1,17 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import pandas as pd
 import os
 
 app = FastAPI()
 
+# 1. Allow all methods so preflight OPTIONS requests don't get blocked
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["POST"], 
+    allow_methods=["*"], 
     allow_headers=["*"],
 )
 
@@ -17,12 +19,9 @@ class QueryData(BaseModel):
     regions: list[str]
     threshold_ms: float
 
-# FOOLPROOF WAY TO FIND THE FILE IN VERCEL
-# This gets the exact folder that index.py is sitting in
+# File loading logic
 current_dir = os.path.dirname(os.path.abspath(__file__))
 file_path = os.path.join(current_dir, "q-vercel-latency.json")
-
-# Load data
 df = pd.read_json(file_path)
 
 @app.post("/")
@@ -47,4 +46,12 @@ def get_metrics(query: QueryData):
             "breaches": int(breaches)
         }
         
-    return results
+    # 2. Forcefully attach the exact CORS headers requested in the forum
+    custom_headers = {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+        "Access-Control-Allow-Headers": "Content-Type, Authorization",
+        "Access-Control-Expose-Headers": "Access-Control-Allow-Origin",
+    }
+    
+    return JSONResponse(content=results, headers=custom_headers)
